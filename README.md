@@ -9,7 +9,6 @@ Bu proje, temel bir programlama dili sözdizimi için web tabanlı bir editör s
 - İfade analizleri (aritmetik, çağrılar, parantezler vs.)
 - Token vurgulama (highlighting)
 - Hata kontrolü ve hata mesajları
-- HTML, CSS ve JavaScript ile saf tarayıcı üzerinde çalışır (ek kurulum gerekmez)
 
 ## Desteklenen Sözdizimi
 
