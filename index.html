@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Gercek Zamanli Sozdizimi Vurgulayici + Ayristirici</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background-color: #e6f0ff;
+            color: #222;
+        }
+
+        h1 {
+            font-family: 'Futura';
+            text-align: center;
+        }
+
+        #duzenleyici {
+            width: 90%;
+            height: 300px;
+            margin: 20px auto;
+            border: 1.5px solid #99bbff;
+            font-size: 16px;
+            padding: 12px 15px;
+            outline: none;
+            overflow-y: auto;
+            background-color: #f0f7ff;
+            border-radius: 8px;
+            box-shadow: 0 3px 6px rgba(0, 0, 50, 0.1);
+            transition: border-color 0.3s ease;
+        }
+
+
+        #duzenleyici:focus {
+            border-color: #4a90e2;
+            box-shadow: 0 0 8px #4a90e2aa;
+        }
+
+        .keyword-general {
+            color: #2a52be;
+            /* koyu mavi */
+            font-weight: 700;
+        }
+
+        .keyword-case {
+            color: #d2691e;
+            /* koyu turuncu */
+            font-weight: 700;
+        }
+
+        .keyword-var {
+            color: #6b18a6;
+            /* mor */
+            font-weight: 700;
+        }
+
+        .identifier {
+            color: #161616;
+        }
+
+        .number {
+            color: #c15f19;
+        }
+
+        .operator {
+            color: #e33b3b;
+            font-weight: 700;
+        }
+
+        .whitespace {
+            color: #a6a5a5;
+        }
+
+        .string {
+            color: #34a766;
+        }
+
+        .comment {
+            color: #7d7b7b;
+            font-style: italic;
+        }
+
+        .unknown {
+            background-color: rgb(227, 194, 194);
+            border-bottom: 2px solid #c63333;
+        }
+
+        #durum {
+            margin-top: 10px;
+            font-weight: 700;
+            color: #2a7d4e;
+        }
+
+        #durum.error {
+            color: #d43939;
+        }
+
+        #duzenleyici.syntax-error {
+            border-color: #d43939;
+            box-shadow: 0 0 6px #d53838aa;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Gerçek Zamanlı Sözdizimi Vurgulayıcı ve Ayrıştırıcı</h1>
+    <div id="duzenleyici" contenteditable="true" spellcheck="false"></div>
+    <div id="durum"></div>
+
+    <script>
+        // Düzenleyici alanını seçiyoruz
+        const editor = document.getElementById("duzenleyici");
+
+        // Klavyeden tuşa basıldığında burası çalışacak
+        editor.addEventListener("keydown", function (e) {
+            // Eğer basılan tuş Enter ise
+            if (e.key === "Enter") {
+                // Tarayıcının Enter için yaptığı varsayılan işlemi durdur
+                e.preventDefault();
+
+                // Şu anda seçili metni alıyoruz
+                const selection = window.getSelection();
+                if (!selection.rangeCount) return; // Eğer seçim yoksa çık
+
+                // Seçimin olduğu yeri al
+                const range = selection.getRangeAt(0);
+                // Seçilen içeriği temizle (örneğin seçili metin varsa silinsin)
+                range.deleteContents();
+
+                // Yeni bir satır başı oluşturmak için <br> ekle
+                const br = document.createElement("br");
+                range.insertNode(br);
+
+                // İmlecin yeni satıra doğru şekilde geçmesi için bir <br> daha ekle
+                const nextBr = document.createElement("br");
+                range.insertNode(nextBr);
+
+                // İmleci ikinci <br>'in sonrasına taşıyoruz ki orada kalsın
+                range.setStartAfter(nextBr);
+                range.collapse(true);
+
+                // Seçimi güncelle
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
+        });
+
+        // Burada token türlerini tanımlıyoruz
+        const TokenType = {
+            AnahtarKelimeGenel: 'keyword-general',  // Genel anahtar kelimeler (if, for, while vs.)
+            AnahtarKelimeDurum: 'keyword-case',     // 'case' gibi durum anahtar kelimeleri
+            AnahtarKelimeDegisken: 'keyword-var',  // Değişken tanımlama anahtar kelimeleri (var, let, const)
+            Tanimlayici: 'identifier',               // Değişken isimleri, fonksiyon isimleri gibi tanımlayıcılar
+            Sayi: 'number',                          // Sayılar (123, 3.14, 0xFF gibi)
+            Operator: 'operator',                    // İşlem sembolleri (+, -, ==, && vb.)
+            Bosluk: 'whitespace',                    // Boşluk, tab, yeni satır gibi karakterler
+            Dize: 'string',                         // Metin dizeleri ("merhaba", 'selam' gibi)
+            Yorum: 'comment',                       // Kod içi yorumlar
+            DosyaSonu: 'eof',                       // Dosya sonu (kullanılabilir ama şimdilik yok)
+            BILINMEYEN: 'unknown',                  // Bilinmeyen türler, henüz tanımlanmamış şeyler
+        };
+
+        // Bunlar da dilde kullanılan genel anahtar kelimeler
+        const anahtarKelimelerGenel = [
+            "break", "catch", "class", "continue", "debugger", "default", "delete",
+            "do", "else", "export", "extends", "finally", "for", "function", "if",
+            "import", "in", "instanceof", "new", "return", "super", "switch", "this",
+            "throw", "try", "typeof", "void", "while", "with", "yield", "await",
+            "static", "enum", "implements", "interface", "package", "private",
+            "protected", "public", "true", "false", "null", "undefined"
+        ];
+
+        // Sadece 'case' anahtar kelimesi (switch-case için)
+        const anahtarKelimelerDurum = ["case"];
+
+        // Değişken tanımlamak için kullanılan anahtar kelimeler
+        const anahtarKelimelerDegisken = ["var", "let", "const"];
+
+        // Burada da farklı token tiplerini ayırt etmek için regex kalıpları var
+        const belirtecOzellikleri = [
+            [/^\s+/, TokenType.Bosluk],                            // Boşluk, tab, yeni satır gibi
+            [/^\/\/.*/, TokenType.Yorum],                          // Tek satır yorum (// ile başlayan)
+            [/^\/\*[\s\S]*?\*\//, TokenType.Yorum],               // Çok satırlı yorum (/* ... */)
+            [/^"(?:[^"\\]|\\.)*"/, TokenType.Dize],                // Çift tırnak içindeki metin
+            [/^'(?:[^'\\]|\\.)*'/, TokenType.Dize],                // Tek tırnak içindeki metin
+            [/^`(?:[^`\\]|\\.)*`/, TokenType.Dize],                // Backtick (`) ile yazılan template string
+            [/^\b(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|\d+(\.\d+)?([eE][+-]?\d+)?)\b/, TokenType.Sayi], // Sayılar (hex, octal, binary ve ondalık)
+            [/^(===|!==|==|!=|<=|>=|=>|&&|\|\||\+\+|--)/, TokenType.Operator], // Çoklu karakter operatörler
+            [/^([-+*/%<>=!&|^~?:;,])/, TokenType.Operator],        // Tek karakterli operatörler
+            [/^[\(\)\{\}\[\]\.]/, TokenType.Operator],             // Parantezler, süslü parantez, köşeli parantez ve nokta
+            [/^[a-zA-Z_$][a-zA-Z0-9_$]*/, 'identifier'],           // Tanımlayıcılar (değişken isimleri vs.)
+        ];
+
+        // --- LEXER (Sözcüksel Analizci) ---
+        // Bu fonksiyon, verilen kod metnini alır ve tek tek tokenlarına böler.
+        // Yani kodu anlamlı küçük parçalara ayırır: anahtar kelimeler, sayılar, operatörler vs.
+        function sozcukselAnalizci(girdi) {
+            const belirtecler = [];  // Bulunan tokenları buraya koyacağız
+            let konum = 0;           // Şu an metinde hangi karakterde olduğumuz
+
+            // Metnin sonuna kadar devam et
+            while (konum < girdi.length) {
+                let eslesti = false; // O anki pozisyonda bir eşleşme bulduk mu?
+
+                // Tüm belirteç özelliklerinin regex'leri ile sırayla dene
+                for (const [regex, tip] of belirtecOzellikleri) {
+                    const altDize = girdi.slice(konum);  // Şu anki konumdan itibaren kalan metin
+                    const eslesme = regex.exec(altDize); // Regex'i uygula ve eşleşme var mı bak
+
+                    if (eslesme) { // Eşleşme varsa
+                        let deger = eslesme[0];  // Eşleşen metin parçası
+                        let belirtecTipi = tip;   // Şimdilik tip bu
+
+                        // Eğer tip 'identifier' ise, bunun aslında hangi tür anahtar kelime olduğunu kontrol et
+                        if (tip === 'identifier') {
+                            if (anahtarKelimelerGenel.includes(deger))
+                                belirtecTipi = TokenType.AnahtarKelimeGenel;
+                            else if (anahtarKelimelerDurum.includes(deger))
+                                belirtecTipi = TokenType.AnahtarKelimeDurum;
+                            else if (anahtarKelimelerDegisken.includes(deger))
+                                belirtecTipi = TokenType.AnahtarKelimeDegisken;
+                            else
+                                belirtecTipi = TokenType.Tanimlayici; // Hiçbiri değilse normal tanımlayıcıdır
+                        }
+
+                        // Bulduğumuz belirteci listeye ekle
+                        belirtecler.push({
+                            type: belirtecTipi,
+                            value: deger,
+                            start: konum,
+                            end: konum + deger.length
+                        });
+
+                        // Konumu ilerlet (eşleşen uzunluk kadar)
+                        konum += deger.length;
+                        eslesti = true; // Eşleşme bulundu işareti
+                        break;          // Diğer regexlere bakmaya gerek yok, döngüden çık
+                    }
+                }
+
+                // Eğer hiç eşleşme yoksa buraya gireriz
+                if (!eslesti) {
+                    // Bilinmeyen karakter olarak işaretle ve ilerle
+                    belirtecler.push({
+                        type: TokenType.BILINMEYEN,
+                        value: girdi[konum],
+                        start: konum,
+                        end: konum + 1
+                    });
+                    konum++;
+                }
+            }
+
+            // Metnin sonunda dosya sonu belirteci ekle
+            belirtecler.push({ type: TokenType.DosyaSonu, value: '', start: konum, end: konum });
+
+            // Bulunan tüm tokenları döndür
+            return belirtecler;
+        }
+
+        // --- HIGHLIGHTER (Vurgulayici) ---
+        // Bu fonksiyon, lexer'dan gelen belirteçleri alıp HTML olarak renklendiriyor.
+        // Yani kodu renkli ve okunabilir hale getirmek için kullanıyoruz.
+        function vurgula(belirtecler) {
+            let html = '';  // Sonuçta oluşacak HTML kodu
+
+            // Her bir belirteci tek tek işliyoruz
+            belirtecler.forEach(belirtec => {
+                if (belirtec.type === TokenType.Bosluk) {
+                    // Boşluklar, tab ve yeni satırları HTML karşılıklarıyla değiştiriyoruz
+                    html += belirtec.value
+                        .replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;') // Tab'ı 4 boşluk yap
+                        .replace(/ /g, '&nbsp;')                    // Normal boşlukları HTML boşluğuna çevir
+                        .replace(/\n/g, '<br>');                     // Yeni satırı <br> olarak ekle
+                } else if (belirtec.type === TokenType.DosyaSonu) {
+                    // Dosya sonu tokenı görünür bir şey olmadığı için atlıyoruz
+                } else {
+                    // Diğer tüm tokenları, türüne göre CSS class'ıyla <span> içine alıyoruz
+                    // Böylece farklı türler farklı renkte gösterilebilir
+                    html += `<span class="${belirtec.type}">${htmlKarakterlerdenKac(belirtec.value)}</span>`;
+                }
+            });
+
+            // Sonunda hazırladığımız HTML kodunu döndürüyoruz
+            return html;
+        }
+        // Girilen metindeki özel HTML karakterlerini güvenli şekilde kaçırıyor
+        // Böylece <, >, &, " gibi karakterler HTML içinde sorun yaratmaz
+        function htmlKarakterlerdenKac(metin) {
+            const div = document.createElement('div');              // Geçici bir div oluşturuyoruz
+            div.appendChild(document.createTextNode(metin));        // Metni bu div'in içine saf metin olarak ekliyoruz
+            return div.innerHTML;                                    // Div'in HTML içeriğini alıyoruz, böylece özel karakterler kaçıyor
+        }
+
+        // --- PARSER (Sözdizimi Analizci) ---
+        // Kodun sözdizimini kontrol eden ve anlamlandıran sınıf
+        class Ayristirici {
+            constructor(belirtecler) {
+                // Boşluk ve yorumları atıp sadece anlamlı tokenlarla çalışıyoruz
+                this.belirtecler = belirtecler.filter(t => t.type !== TokenType.Bosluk && t.type !== TokenType.Yorum);
+                this.konum = 0;     // Şu an hangi token'dayız
+                this.hatalar = [];  // Bulunan sözdizimi hatalarını buraya kaydedeceğiz
+            }
+
+            // Şu anki tokena bakmak için yardımcı fonksiyon
+            ileri() {
+                return this.belirtecler[this.konum];
+            }
+
+            // Beklenen tip ve değerle eşleşen tokenı tüket (ilerlet), değilse hata fırlat
+            ilerlet(beklenenTip, beklenenDeger = null) {
+                const belirtec = this.ileri();  // Mevcut tokena bak
+
+                // Tip ve (varsa) değer uyuşuyorsa, ilerle ve o tokenı döndür
+                if (belirtec.type === beklenenTip && (beklenenDeger === null || belirtec.value === beklenenDeger)) {
+                    this.konum++;
+                    return belirtec;
+
+                } else {
+                    // Eğer beklenenle uyuşmazsa, anlamlı bir hata mesajı hazırla
+                    let hataMesaji = `Bekleniyor: '${beklenenTip}'`;
+                    if (beklenenDeger !== null) {
+                        hataMesaji += ` (Değer: '${beklenenDeger}')`;
+                    }
+                    hataMesaji += `, Bulundu: '${belirtec.type}' ('${belirtec.value}')`;
+
+                    // Hata kaydet (istemiyorsan bunu çıkarabilirsin)
+                    this.hata(hataMesaji, belirtec);
+
+                    // Ve sözdizimi hatası fırlat, böylece parse işlemi durur
+                    throw new SyntaxError(hataMesaji + ` at konum ${belirtec.start}`);
+                }
+            }
+            // Hata bilgisini kaydetmek için küçük bir fonksiyon
+            hata(mesaj, belirtec) {
+                this.hatalar.push({
+                    mesaj: mesaj,       // Hata mesajı
+                    belirtec: belirtec, // Hangi tokenda hata oluştu
+                    at: belirtec.start  // Hatanın kod içindeki konumu
+                });
+            }
+
+            // --- Dilbilgisi Kuralları ---
+            // Bu kısımda dilin kurallarına göre kodu analiz ediyoruz
+
+
+            // Programın kendisi birden fazla ifade içeriyor, sonunda da dosya sonu olmalı
+            programiAyristir() {
+                this.hatalar = [];    // Hataları sıfırla
+                const ifadeler = [];  // Programdaki ifadeleri buraya topluyoruz
+                try {
+                    // Dosya sonuna kadar ifadeleri tek tek ayırıyoruz
+                    while (this.ileri().type !== TokenType.DosyaSonu) {
+                        ifadeler.push(this.ifadeyiAyristir());
+                    }
+                    this.ilerlet(TokenType.DosyaSonu);  // Dosya sonunu tüket
+                } catch (e) {
+                    // Hata zaten hata listesine eklendi, burada sadece parse işlemini durduruyoruz
+                }
+                // Program yapısını ve varsa hataları döndür
+                return {
+                    type: 'Program',
+                    ifadeler,
+                    hatalar: this.hatalar.length > 0 ? this.hatalar : null
+                };
+            }
+
+            // Yani, bir ifade birçok farklı şey olabilir, burası hangisi olduğunu karar veriyor
+            ifadeyiAyristir() {
+                const belirtec = this.ileri();
+
+                // Öncelikle anahtar kelimelerden hangisi ise ona göre ilgili parse fonksiyonunu çağırıyoruz
+                if (belirtec.type === TokenType.AnahtarKelimeGenel) {
+                    const deger = belirtec.value;
+                    if (deger === 'function') {
+                        return this.fonksiyonTaniminiAyristir();
+                    } else if (deger === 'if') {
+                        return this.ifIfadesiniAyristir();
+                    } else if (deger === 'return') {
+                        return this.returnIfadesiniAyristir();
+                    } else if (deger === 'for') {
+                        return this.forIfadesiniAyristir();
+                    } else if (deger === 'switch') {
+                        return this.switchIfadesiniAyristir();
+                    } else if (deger === 'break') {
+                        return this.breakIfadesiniAyristir();
+                    } else if (deger === 'continue') {
+                        return this.continueIfadesiniAyristir();
+                    }
+                }
+
+                // Değişken bildirimi (var, let, const) ise ona özel ayrıştırıcıyı çağır
+                if (belirtec.type === TokenType.AnahtarKelimeDegisken) {
+                    return this.degiskenBildiriminiAyristir();
+                }
+
+                // Eğer tanımlayıcı (identifier) var ve hemen ardından '=' işareti geliyorsa, atama işlemi var demektir
+                if (belirtec.type === TokenType.Tanimlayici && this.belirtecler[this.konum + 1] && this.belirtecler[this.konum + 1].value === '=') {
+                    return this.atamayiAyristir();
+                }
+
+                // Eğer sadece noktalı virgül ise boş ifade olarak ayrıştır
+                if (belirtec.value === ';') {
+                    return this.bosIfadeyiAyristir();
+                }
+
+                // Yukarıdakilerden hiçbiri değilse, genel ifade ayrıştırıcısına git
+                return this.ifadeIfadesiniAyristir();
+            }
+
+            // Fonksiyon tanımını ayrıştıran fonksiyon
+            fonksiyonTaniminiAyristir() {
+                // 'function' anahtar kelimesini bekleyip tüketiyoruz
+                this.ilerlet(TokenType.AnahtarKelimeGenel, 'function');
+
+                // Fonksiyon ismini alıyoruz
+                const idBelirtec = this.ilerlet(TokenType.Tanimlayici);
+                const id = idBelirtec.value;
+
+                // Parametrelerin başlayacağı '(' karakterini tüket
+                this.ilerlet(TokenType.Operator, '(');
+
+                // Parametreleri toplayacağımız dizi
+                const parametreler = [];
+                // Eğer parametre listesi boş değilse (yani hemen ')' gelmiyorsa)
+                if (this.ileri().type !== TokenType.Operator || this.ileri().value !== ')') {
+                    do {
+                        // Her parametre bir tanımlayıcı olmalı
+                        const paramBelirtec = this.ilerlet(TokenType.Tanimlayici);
+                        parametreler.push(paramBelirtec.value);
+
+                        // Sonraki parametre varsa, arada ',' olacak, onu da tüket
+                        if (this.ileri().value === ',') {
+                            this.ilerlet(TokenType.Operator, ',');
+                        } else {
+                            break;  // Parametreler bitti
+                        }
+                    } while (true);
+                }
+
+                // Parametreleri kapatan ')'
+                this.ilerlet(TokenType.Operator, ')');
+
+                // Fonksiyonun gövdesi bir blok ifadesidir, onu ayrıştırıyoruz
+                const govde = this.blokIfadesiniAyristir();
+
+                // Son olarak fonksiyon tanımı nesnesini döndürüyoruz
+                return {
+                    type: 'FonksiyonTanimi',
+                    id,
+                    parametreler,
+                    govde,
+                };
+            }
+
+            // 'return' ifadesini ayrıştıran fonksiyon
+            returnIfadesiniAyristir() {
+                // 'return' kelimesini tüket
+                this.ilerlet(TokenType.AnahtarKelimeGenel, 'return');
+                let arguman = null;
+
+                // Eğer hemen ';' gelmiyorsa, geri döndürülecek ifadeyi ayrıştır
+                if (this.ileri().type !== TokenType.Operator || this.ileri().value !== ';') {
+                    arguman = this.ifadeyiAyristirGenel();
+                }
+
+                // Sonunda noktalı virgülü tüket
+                this.ilerlet(TokenType.Operator, ';');
+
+                // Return ifadesi objesini döndür
+                return { type: 'DonusIfadesi', arguman };
+            }
+
+            // 'if' ifadesini ayrıştıran fonksiyon
+
+            ifIfadesiniAyristir() {
+                // 'if' anahtar kelimesini tüket (beklenen token)
+                this.ilerlet(TokenType.AnahtarKelimeGenel, 'if');
+
+                // Açılış parantez '(' tokenını tüket
+                this.ilerlet(TokenType.Operator, '(');
+
+                // Koşul ifadesini genel ifade ayrıştırıcı ile ayrıştır
+                const kosul = this.ifadeyiAyristirGenel();
+
+                // Kapanış parantez ')' tokenını tüket
+                this.ilerlet(TokenType.Operator, ')');
+
+                // Eğer sonraki token '{' ise blok ifadesini ayrıştır, değilse tek bir ifade ayrıştır
+                const sonuc = (this.ileri().type === TokenType.Operator && this.ileri().value === '{')
+                    ? this.blokIfadesiniAyristir() // Blok ifadesi: { ... }
+                    : this.ifadeyiAyristir();       // Tek satırlık ifade
+
+                // 'else' bloğu için varsayılan olarak null
+                let alternatif = null;
+
+                // Eğer sonraki token 'else' anahtar kelimesi ise
+                if (this.ileri().type === TokenType.AnahtarKelimeGenel && this.ileri().value === 'else') {
+                    // 'else' anahtar kelimesini tüket
+                    this.ilerlet(TokenType.AnahtarKelimeGenel, 'else');
+
+                    // 'else' bloğu da blok ifadesi ya da tek satır ifade olabilir
+                    alternatif = (this.ileri().type === TokenType.Operator && this.ileri().value === '{')
+                        ? this.blokIfadesiniAyristir()
+                        : this.ifadeyiAyristir();
+                }
+
+                // Elde edilen ayrıştırılmış ifadenin AST düğümünü döndür
+                return { type: 'EgerIfadesi', kosul, sonuc, alternatif };
+            }
+
+            // --- Blok ifadesini ayrıştırıyoruz ---
+            // Birden fazla ifade süslü parantezler içinde olabilir { ... }
+            blokIfadesiniAyristir() {
+                // '{' karakterini bekleyip alıyoruz
+                this.ilerlet(TokenType.Operator, '{');
+
+                // Blok içindeki ifadeleri depolayacağımız dizi
+                const govde = [];
+
+                // '}' kapanış parantezine kadar devam et
+                while (this.ileri().type !== TokenType.Operator || this.ileri().value !== '}') {
+                    // Eğer dosya sonu ya da bilinmeyen karakterle karşılaşırsak hata ver
+                    if (this.ileri().type === TokenType.DosyaSonu || this.ileri().type === TokenType.BILINMEYEN) {
+                        this.hata("Blok ifadesi tamamlanamadi: '}' bekleniyor", this.ileri());
+                        break;
+                    }
+
+                    // Blok içindeki ifadeyi ayrıştır ve diziye ekle
+                    govde.push(this.ifadeyiAyristir());
+                }
+
+                // '}' kapanış parantezini tüketiyoruz
+                this.ilerlet(TokenType.Operator, '}');
+
+                // Blok ifadesi objesi olarak geri dönüyoruz
+                return { type: 'BlokIfadesi', govde };
+            }
+
+            // --- Değişken bildirimi ayrıştırması ---
+            // var, let veya const ile yapılan değişken tanımlamalar
+            degiskenBildiriminiAyristir() {
+                // 'var', 'let' veya 'const' anahtar kelimesini tüket
+                this.ilerlet(TokenType.AnahtarKelimeDegisken);
+
+                // Değişken ismini al
+                const id = this.ilerlet(TokenType.Tanimlayici);
+
+                let ifade = null;
+
+                // Eğer '=' işareti varsa, değişkene bir değer atanıyor demektir
+                if (this.ileri().type === TokenType.Operator && this.ileri().value === '=') {
+                    this.ilerlet(TokenType.Operator, '=');
+                    ifade = this.ifadeyiAyristirGenel();
+                }
+
+                // Bildirim sonunda noktalı virgül olmalı
+                this.ilerlet(TokenType.Operator, ';');
+
+                // Değişken bildirimi şeklinde obje döndür
+                return { type: 'DegiskenBildirimi', id: id.value, deger: ifade };
+            }
+
+            // --- Atama işlemini ayrıştır ---
+            // Bir değişkene değer ataması yapılıyor
+            atamayiAyristir() {
+                // Önce atama yapılacak değişkenin ismini al
+                const id = this.ilerlet(TokenType.Tanimlayici);
+
+                // '=' operatörünü tüket
+                this.ilerlet(TokenType.Operator, '=');
+
+                // Atanan ifadeyi ayrıştır
+                const ifade = this.ifadeyiAyristirGenel();
+
+                // Satır sonundaki noktalı virgülü al
+                this.ilerlet(TokenType.Operator, ';');
+
+                // Atama işlemini temsil eden nesneyi döndür
+                return { type: 'Atama', id: id.value, deger: ifade };
+            }
+
+            // --- Tek satırlık ifade ayrıştırması ---
+            // Bir ifadenin sonunda noktalı virgül olmalı
+            ifadeIfadesiniAyristir() {
+                // Genel ifade ayrıştırıcıyı kullanarak ifadeyi alıyoruz
+                const ifade = this.ifadeyiAyristirGenel();
+
+                // Sonunda noktalı virgülü bekleyip tüketiyoruz
+                this.ilerlet(TokenType.Operator, ';');
+
+                // IfadeIfadesi tipinde objeyi döndürüyoruz
+                return { type: 'IfadeIfadesi', ifade };
+            }
+
+            // --- For döngüsü ayrıştırması ---
+            // for (başlangıç; koşul; artış) { ... }
+            forIfadesiniAyristir() {
+                // 'for' anahtar kelimesini al
+                this.ilerlet(TokenType.AnahtarKelimeGenel, 'for');
+
+                // Parantezi açıyoruz
+                this.ilerlet(TokenType.Operator, '(');
+
+                // İlk kısım: değişken bildirimi ya da ifade ya da boş olabilir
+                let baslangic = null;
+                if (this.ileri().type === TokenType.AnahtarKelimeDegisken) {
+                    // var, let veya const bildirimi
+                    baslangic = this.degiskenBildiriminiAyristir();
+                } else if (this.ileri().value !== ';') {
+                    // başka bir ifade olabilir
+                    baslangic = this.ifadeIfadesiniAyristir();
+                } else {
+                    // boşsa sadece noktalı virgülü alıyoruz
+                    this.ilerlet(TokenType.Operator, ';');
+                }
+
+                // Koşul ifadesi, yoksa null
+                let kosul = null;
+                if (this.ileri().value !== ';') {
+                    kosul = this.ifadeyiAyristirGenel();
+                }
+
+                // Koşulu bitiren noktalı virgül
+                this.ilerlet(TokenType.Operator, ';');
+
+                // Artış ifadesi, yoksa null
+                let guncelleme = null;
+                if (this.ileri().value !== ')') {
+                    guncelleme = this.ifadeyiAyristirGenel();
+                }
+
+                // Parantezi kapatıyoruz
+                this.ilerlet(TokenType.Operator, ')');
+
+                // Döngünün gövdesini ayrıştırıyoruz
+                const govde = this.blokIfadesiniAyristir();
+
+                // For döngüsünü temsil eden nesneyi döndür
+                return { type: 'ForIfadesi', baslangic, kosul, guncelleme, govde };
+            }
+
+            // --- break ifadesi ayrıştırması ---
+            // Döngü veya switch içinden çıkmak için
+            breakIfadesiniAyristir() {
+                // 'break' kelimesini al
+                this.ilerlet(TokenType.AnahtarKelimeGenel, 'break');
+
+                // Noktalı virgül ile bitmeli
+                this.ilerlet(TokenType.Operator, ';');
+
+                // Break ifadesi objesi
+                return { type: 'BreakIfadesi' };
+            }
+
+            // --- continue ifadesi ayrıştırması ---
+            // Döngünün o adımını atlamak için
+            continueIfadesiniAyristir() {
+                // 'continue' kelimesini al
+                this.ilerlet(TokenType.AnahtarKelimeGenel, 'continue');
+
+                // Noktalı virgül ile bitmeli
+                this.ilerlet(TokenType.Operator, ';');
+
+                // Continue ifadesi objesi
+                return { type: 'ContinueIfadesi' };
+            }
+
+            // --- Switch ifadesi ayrıştırması ---
+            // switch (ifade) { case ...: ... default: ... }
+            switchIfadesiniAyristir() {
+                // 'switch' kelimesini alıyoruz
+                this.ilerlet(TokenType.AnahtarKelimeGenel, 'switch');
+
+                // Parantezi açıyoruz
+                this.ilerlet(TokenType.Operator, '(');
+
+                // Switch'in üzerinde karar vereceği ifade
+                const diskriminant = this.ifadeyiAyristirGenel();
+
+                // Parantezi kapatıyoruz
+                this.ilerlet(TokenType.Operator, ')');
+
+                // Süslü parantez açılıyor
+                this.ilerlet(TokenType.Operator, '{');
+
+                const durumlar = [];
+
+                // Süslü kapanana kadar devam
+                while (this.ileri().type !== TokenType.Operator || this.ileri().value !== '}') {
+
+                    if (this.ileri().type === TokenType.AnahtarKelimeDurum) {
+                        // case durumu
+                        this.ilerlet(TokenType.AnahtarKelimeDurum, 'case');
+
+                        // case'in testi (örneğin case 5:)
+                        const test = this.ifadeyiAyristirGenel();
+
+                        // Noktali iki nokta
+                        this.ilerlet(TokenType.Operator, ':');
+
+                        const sonuc = [];
+                        // case bloğundaki ifadeleri topla, yeni case/default veya kapanışa kadar devam et
+                        while (
+                            this.ileri().type !== TokenType.AnahtarKelimeDurum &&
+                            !(this.ileri().type === TokenType.AnahtarKelimeGenel && this.ileri().value === 'default') &&
+                            !(this.ileri().type === TokenType.Operator && this.ileri().value === '}')
+                        ) {
+                            sonuc.push(this.ifadeyiAyristir());
+                        }
+
+                        durumlar.push({ type: 'SwitchDurumu', test, sonuc });
+
+                    } else if (this.ileri().type === TokenType.AnahtarKelimeGenel && this.ileri().value === 'default') {
+                        // default durumu
+                        this.ilerlet(TokenType.AnahtarKelimeGenel, 'default');
+                        this.ilerlet(TokenType.Operator, ':');
+
+                        const sonuc = [];
+                        // default bloğu ifadelerini topla, yeni case/default veya kapanışa kadar devam et
+                        while (
+                            this.ileri().type !== TokenType.AnahtarKelimeDurum &&
+                            !(this.ileri().type === TokenType.AnahtarKelimeGenel && this.ileri().value === 'default') &&
+                            !(this.ileri().type === TokenType.Operator && this.ileri().value === '}')
+                        ) {
+                            sonuc.push(this.ifadeyiAyristir());
+                        }
+
+                        durumlar.push({ type: 'SwitchDurumu', test: null, sonuc });
+
+                    } else {
+                        // Burada beklenmeyen bir şey var, hata kaydet
+                        this.hata("Switch içinde beklenmeyen ifade var", this.ileri());
+
+                        // Hatalı kısmı atlamak için ilerle
+                        this.konum++;
+                    }
+
+                    // Dosya sonuna gelindiyse ama süslü kapanış yoksa hata bildir
+                    if (this.ileri().type === TokenType.DosyaSonu) {
+                        this.hata("Switch ifadesi süslü parantez kapatılmadan dosya sonlandı", this.ileri());
+                        break;
+                    }
+                }
+
+                // Süslü parantezi kapat
+                this.ilerlet(TokenType.Operator, '}');
+
+                // Switch ifadesini döndür
+                return { type: 'SwitchIfadesi', diskriminant, durumlar };
+            }
+
+            // --- Boş ifade (sadece noktalı virgül) ---
+            bosIfadeyiAyristir() {
+                this.ilerlet(TokenType.Operator, ';');
+                return { type: 'BosIfade' };
+            }
+
+            // --- Genel ifade ayrıştırıcı ---
+            // Burada en yüksek seviyedeki ifadeyi ayrıştırıyoruz (örneğin karşılaştırma)
+            ifadeyiAyristirGenel() {
+                return this.karsilastirmaIfadesiniAyristir();
+            }
+
+            // --- Karşılaştırma ifadeleri ---
+            // a > b, x == y gibi ifadeler
+            karsilastirmaIfadesiniAyristir() {
+                let sol = this.toplamaIfadesiniAyristir();
+
+                // Desteklenen karşılaştırma operatörleri
+                const karsilastirmaOperatorleri = ['>', '<', '==', '!=', '<=', '>=', '===', '!=='];
+
+                // Ardışık karşılaştırma operatörleri varsa onları da işle
+                while (this.ileri().type === TokenType.Operator && karsilastirmaOperatorleri.includes(this.ileri().value)) {
+                    const operator = this.ilerlet(TokenType.Operator);
+                    const sag = this.toplamaIfadesiniAyristir();
+                    sol = { type: 'IkiliIfade', operator: operator.value, sol, sag };
+                }
+
+                return sol;
+            }
+
+            // --- Toplama ve çıkarma işlemleri ---
+            // a + b - c gibi ifadeler
+            toplamaIfadesiniAyristir() {
+                let sol = this.carpmaIfadesiniAyristir();
+
+                while (this.ileri().type === TokenType.Operator && (this.ileri().value === '+' || this.ileri().value === '-')) {
+                    const operator = this.ilerlet(TokenType.Operator);
+                    const sag = this.carpmaIfadesiniAyristir();
+                    sol = { type: 'IkiliIfade', operator: operator.value, sol, sag };
+                }
+
+                return sol;
+            }
+
+            // --- Çarpma ve bölme işlemlerini ayrıştır ---
+            // Temel ifadelerin (*) veya (/) ile bağlandığı ifadeler
+            carpmaIfadesiniAyristir() {
+                // Önce temel ifadeyi al
+                let sol = this.temelIfadeyiAyristir();
+
+                // Eğer sonraki operatör * veya / ise döngü devam eder
+                while (this.ileri().type === TokenType.Operator && (this.ileri().value === '*' || this.ileri().value === '/')) {
+                    const operator = this.ilerlet(TokenType.Operator);
+                    const sag = this.temelIfadeyiAyristir();
+                    sol = { type: 'IkiliIfade', operator: operator.value, sol, sag };
+                }
+
+                return sol;
+            }
+
+            // --- Fonksiyon çağrısı ayrıştırması ---
+            // Örneğin: foo(1, x+2)
+            cagriIfadesiniAyristir(cagiran) {
+                this.ilerlet(TokenType.Operator, '(');
+                const argumanlar = [];
+
+                // Parantez içinde parametre varsa, onları ayrıştır
+                if (this.ileri().type !== TokenType.Operator || this.ileri().value !== ')') {
+                    do {
+                        argumanlar.push(this.ifadeyiAyristirGenel());
+
+                        if (this.ileri().value === ',') {
+                            this.ilerlet(TokenType.Operator, ',');
+                        } else {
+                            break;
+                        }
+                    } while (true);
+                }
+
+                this.ilerlet(TokenType.Operator, ')');
+
+                return {
+                    type: 'CagriIfadesi',
+                    cagiran: cagiran.value,
+                    argumanlar: argumanlar
+                };
+            }
+
+            // --- Temel ifadeleri ayrıştır ---
+            // Sayılar, dizeler, boolean değerler, tanımlayıcılar veya parantez içi ifadeler
+            temelIfadeyiAyristir() {
+                const belirtec = this.ileri();
+
+                if (belirtec.type === TokenType.Sayi) {
+                    return this.ilerlet(TokenType.Sayi);
+
+                } else if (belirtec.type === TokenType.Dize) {
+                    return this.ilerlet(TokenType.Dize);
+
+                } else if (belirtec.type === TokenType.AnahtarKelimeGenel &&
+                    (belirtec.value === 'true' || belirtec.value === 'false' || belirtec.value === 'null' || belirtec.value === 'undefined')) {
+                    return this.ilerlet(TokenType.AnahtarKelimeGenel);
+
+                } else if (belirtec.type === TokenType.Tanimlayici) {
+                    // Tanımlayıcı olabilir, ya değişken ya da fonksiyon çağrısı
+                    let dugum = this.ilerlet(TokenType.Tanimlayici);
+
+                    // Eğer ardından '(' geliyorsa fonksiyon çağrısı
+                    if (this.ileri().type === TokenType.Operator && this.ileri().value === '(') {
+                        dugum = this.cagriIfadesiniAyristir(dugum);
+                    }
+
+                    return dugum;
+
+                } else if (belirtec.type === TokenType.Operator && belirtec.value === '(') {
+                    // Parantez içi ifade
+                    this.ilerlet(TokenType.Operator, '(');
+                    const ifade = this.ifadeyiAyristirGenel();
+                    this.ilerlet(TokenType.Operator, ')');
+                    return ifade;
+
+                } else {
+                    // Beklenmeyen belirtec, hata fırlat
+                    const hataMesaji = `Bekleniyor: Sayi, Dize, Dogruluk Degeri, Tanimlayici veya '(', Bulundu: '${belirtec.type}' ('${belirtec.value}')`;
+                    this.hata(hataMesaji, belirtec);
+                    throw new SyntaxError(hataMesaji + ` at konum ${belirtec.start}`);
+                }
+            }
+        }
+        // --- GUI ve Güncelleme Fonksiyonları ---
+
+        const duzenleyici = document.getElementById('duzenleyici'); // Metin düzenleme alanı
+        const durum = document.getElementById('durum'); // Durum mesajlarının gösterileceği alan
+
+        let sonMetinIcerigi = ''; // Önceki metin içeriği, değişiklik takibi için
+
+        // Metin değiştiğinde çağrılır, sözcükleri vurgular ve söz dizimini kontrol eder
+        function vurgulamaVeAyrismayiGuncelle() {
+            const mevcutMetin = duzenleyici.innerText;
+
+            // Eğer metin değişmemişse, tekrar işlem yapma
+            if (mevcutMetin === sonMetinIcerigi) {
+                return;
+            }
+            sonMetinIcerigi = mevcutMetin;
+
+            // İmlecin (caret) mevcut konumunu hesapla
+            const selection = window.getSelection();
+            let caretOffset = 0;
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                const preCaretRange = range.cloneRange();
+
+                // Düzenleyicinin tüm içeriğini kapsayan bir aralık oluştur
+                preCaretRange.selectNodeContents(duzenleyici);
+
+                // İmlecin bittiği yere kadar aralığı sınırla
+                preCaretRange.setEnd(range.endContainer, range.endOffset);
+
+                // İmlecin karakter olarak pozisyonunu al
+                caretOffset = preCaretRange.toString().length;
+            }
+
+            // Mevcut metni tokenlara ayır (sözcüksel analiz)
+            const tokens = sozcukselAnalizci(mevcutMetin);
+
+            // Tokenları vurgula ve düzenleyicide göster
+            duzenleyici.innerHTML = vurgula(tokens);
+
+            // İmleci doğru konuma ayarla
+            imlecKonumunuAyarla(duzenleyici, caretOffset);
+
+            // Söz dizimini kontrol et (syntax check)
+            sozdiziminiKontrolEt(tokens);
+        }
+
+        // İmlecin metin alanı içindeki doğru pozisyona ayarlanması
+        function imlecKonumunuAyarla(el, offset) {
+            const range = document.createRange();
+            const selection = window.getSelection();
+            let currentOffset = 0;
+            let found = false;
+
+            // Metin düğümünde (text node) imleci konumlandırmak için recursive fonksiyon
+            function metinDugumunuBul(node) {
+                for (let i = 0; i < node.childNodes.length; i++) {
+                    const child = node.childNodes[i];
+
+                    if (child.nodeType === Node.TEXT_NODE) {
+                        const nodeLength = child.nodeValue.length;
+
+                        if (offset >= currentOffset && offset <= currentOffset + nodeLength) {
+                            // İmleç buraya ayarlanacak
+                            range.setStart(child, offset - currentOffset);
+                            range.setEnd(child, offset - currentOffset);
+                            found = true;
+                            return;
+                        }
+                        currentOffset += nodeLength;
+
+                    } else if (child.nodeType === Node.ELEMENT_NODE && child.childNodes.length > 0) {
+                        // Satır sonu <br> ise offset 1 artır
+                        if (child.tagName === 'BR') {
+                            currentOffset += 1;
+                        }
+                        if (!found) metinDugumunuBul(child);
+                    }
+
+                    if (found) return;
+                }
+            }
+
+            // Metin düğümünde imleci ayarla
+            metinDugumunuBul(el);
+
+            if (found) {
+                // Mevcut seçimleri kaldır ve yeni aralığı seç
+                selection.removeAllRanges();
+                selection.addRange(range);
+            } else {
+                // Bulunamazsa, metin alanının sonuna imleci koy
+                const lastChild = el.lastChild;
+                if (lastChild) {
+                    if (lastChild.nodeType === Node.TEXT_NODE) {
+                        range.setStart(lastChild, lastChild.nodeValue.length);
+                        range.setEnd(lastChild, lastChild.nodeValue.length);
+                    } else {
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                    }
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                }
+            }
+        }
+
+        // Sözdizimi kontrolü yapar, hata varsa gösterir, yoksa geçerli mesajı gösterir
+        function sozdiziminiKontrolEt(allTokens) {
+            // Boşluk ve yorum tokenlarını çıkar
+            const parserTokens = allTokens.filter(t => t.type !== TokenType.Bosluk && t.type !== TokenType.Yorum);
+
+            // Eğer boşsa ya da sadece dosya sonu tokenı varsa geçerli kabul et
+            if (parserTokens.length === 0 || (parserTokens.length === 1 && parserTokens[0].type === TokenType.DosyaSonu)) {
+                durum.classList.remove('error');
+                duzenleyici.classList.remove('syntax-error');
+                durum.textContent = 'Sözdizimi Geçerli!';
+                return;
+            }
+
+            // Parser oluştur ve programı ayrıştır
+            const parser = new Ayristirici(parserTokens);
+            const ast = parser.programiAyristir();
+
+            if (ast.hatalar && ast.hatalar.length > 0) {
+                // Hata varsa durumu göster
+                durum.classList.add('error');
+                duzenleyici.classList.add('syntax-error');
+                const ilkHata = ast.hatalar[0];
+                let errorMessage = `Sözdizimi Hatası: ${ilkHata.mesaj}`;
+                durum.textContent = errorMessage;
+            } else {
+                // Hata yoksa temizle ve başarılı mesajı göster
+                durum.classList.remove('error');
+                duzenleyici.classList.remove('syntax-error');
+                durum.textContent = 'Sözdizimi Geçerli!';
+            }
+        }
+
+        // Metin düzenleyicide her input olduğunda güncelleme yap
+        duzenleyici.addEventListener('input', vurgulamaVeAyrismayiGuncelle);
+
+        // Sayfa yüklendiğinde bir kere çağır
+        document.addEventListener('DOMContentLoaded', () => {
+            vurgulamaVeAyrismayiGuncelle();
+        });
+
+    </script>
+</body>
+
+</html>
