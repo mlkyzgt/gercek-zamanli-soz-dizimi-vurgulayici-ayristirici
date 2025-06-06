@@ -15,6 +15,7 @@ Bu proje, temel bir programlama dili sözdizimi için web tabanlı bir editör s
 Şu anda aşağıdaki temel yapılar desteklenmektedir:
 
 - Sayılar
+- Stringler
 - If-Else
 - Döngü
 - Boolean ve özel değerler
